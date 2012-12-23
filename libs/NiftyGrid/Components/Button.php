@@ -7,7 +7,7 @@
  * @license     New BSD Licence
  * @link        http://addons.nette.org/cs/niftygrid
  */
-namespace NiftyGrid;
+namespace NiftyGrid\Components;
 
 use Nette\Utils\Html;
 use NiftyGrid\Grid; // For constant only
@@ -21,13 +21,25 @@ class Button extends \Nette\Application\UI\PresenterComponent
 	private $link;
 
 	/** @var callback|string */
+	private $text;
+
+	/** @var callback|string */
+	private $target;
+
+	/** @var callback|string */
 	private $class;
+
+	/** @var bool */
+	private $ajax = TRUE;
 
 	/** @var callback|string */
 	private $dialog;
 
-	/** @var bool */
-	private $ajax = TRUE;
+	/** @var callback|string */
+	private $show = TRUE;
+
+	/** @var callback|string */
+	private $icon;
 
 	/**
 	 * @param string $label
@@ -73,6 +85,52 @@ class Button extends \Nette\Application\UI\PresenterComponent
 			return call_user_func($this->link, $row);
 		}
 		return $this->link;
+	}
+
+	/**
+	 * @param $text
+	 * @return mixed
+	 */
+	public function setText($text)
+	{
+		$this->text = $text;
+
+		return $this;
+	}
+
+	/**
+	 * @param array $row
+	 * @return string
+	 */
+	private function getText($row)
+	{
+		if(is_callable($this->text)){
+			return call_user_func($this->text, $row);
+		}
+		return $this->text;
+	}
+
+        /**
+	 * @param callback|string $target
+	 * @return Button
+	 */
+	public function setTarget($target)
+	{
+		$this->target = $target;
+
+		return $this;
+	}
+
+	/**
+	 * @param array $row
+	 * @return callback|mixed|string
+	 */
+	private function getTarget($row)
+	{
+		if(is_callable($this->target)){
+			return call_user_func($this->target, $row);
+		}
+		return $this->target;
 	}
 
 	/**
@@ -141,15 +199,75 @@ class Button extends \Nette\Application\UI\PresenterComponent
 	}
 
 	/**
+	 * @param callback|string $show
+	 * @return Button
+	 */
+	public function setShow($show)
+	{
+		$this->show = $show;
+
+		return $this;
+	}
+
+	/**
+	 * @param array $row
+	 * @return callback|mixed|string
+	 */
+	public function getShow($row)
+	{
+		if(is_callable($this->show)){
+			return (boolean) call_user_func($this->show, $row);
+		}
+		return $this->show;
+	}
+
+	/**
+	 * @param callback|string $icon
+	 * @return Button
+	 */
+	public function setIcon($icon)
+	{
+		$this->icon = $icon;
+
+		return $this;
+	}
+
+	/**
+	 * @param array $row
+	 * @return bool
+	 */
+	public function getIcon($row)
+	{
+		if(is_callable($this->icon)){
+			return call_user_func($this->icon, $row);
+		}
+		return $this->icon;
+	}
+
+	/**
 	 * @param array $row
 	 */
 	public function render($row)
 	{
+		if(!$this->getShow($row)){
+			return false;
+		}
+
 		$el = Html::el("a")
 			->href($this->getLink($row))
-			->setClass($this->getClass($row))
-			->addClass("grid-button")
-			->setTitle($this->getLabel($row));
+			->addClass("grid-button btn btn-small")
+			->addClass($this->getClass($row))
+			->setTitle($this->getLabel($row))
+			->setTarget($this->getTarget($row));
+
+		if(!empty($this->icon)){
+			$icon = Html::el('i')->setClass($this->getIcon($row));
+			$el->add($icon);
+		}
+
+		if(!empty($this->text)){
+			$el->add(' '.$this->getText($row));
+		}
 
 		if($this->getName() == Grid::ROW_FORM) {
 			$el->addClass("grid-editable");

@@ -9,14 +9,17 @@
  */
 namespace NiftyGrid;
 
-class Grid extends \Nette\Application\UI\Control
+use Nette;
+use Nette\Application\UI\Presenter;
+
+abstract class Grid extends \Nette\Application\UI\Control
 {
 	const ROW_FORM = "rowForm";
 
 	const ADD_ROW = "addRow";
 
 	/** @persistent array */
-	public $filter;
+	public $filter = array();
 
 	/** @persistent string */
 	public $order;
@@ -39,14 +42,14 @@ class Grid extends \Nette\Application\UI\Control
 	/** @var string */
 	protected $defaultOrder;
 
-	/** @var IDataSource */
+	/** @var DataSource\IDataSource */
 	protected $dataSource;
 
 	/** @var string */
 	protected $primaryKey;
 
-	/** @var int */
-	protected $count;
+	/** @var string */
+	public $gridName;
 
 	/** @var string */
 	public $width;
@@ -78,12 +81,16 @@ class Grid extends \Nette\Application\UI\Control
 	/** @var string */
 	public $messageNoRecords = 'Žádné záznamy';
 
+	/** @var \Nette\Localization\ITranslator */
+	protected $translator;
+
 	/**
 	 * @param \Nette\Application\UI\Presenter $presenter
 	 */
 	protected function attached($presenter)
 	{
 		parent::attached($presenter);
+		if(!$presenter instanceof Presenter) return;
 
 		$this->addComponent(New \Nette\ComponentModel\Container(), "columns");
 		$this->addComponent(New \Nette\ComponentModel\Container(), "buttons");
@@ -138,8 +145,9 @@ class Grid extends \Nette\Application\UI\Control
 			$order = explode(" ", $this->defaultOrder);
 			$this->dataSource->orderData($order[0], $order[1]);
 		}
-		$this->count = $this->getCount();
 	}
+
+	abstract protected function configure($presenter);
 
 	/**
 	 * @param string $subGrid
@@ -194,11 +202,25 @@ class Grid extends \Nette\Application\UI\Control
 	}
 
 	/**
+	 * @param string $columnName
+	 * @return \Nette\Forms\IControl
+	 * @throws UnknownColumnException
+	 */
+	public function getColumnInput($columnName)
+	{
+		if(!$this->columnExists($columnName)){
+			throw new UnknownColumnException("Column $columnName doesn't exists.");
+		}
+
+		return $this['gridForm'][$this->name]['rowForm'][$columnName];
+	}
+
+	/**
 	 * @param string $name
 	 * @param null|string $label
 	 * @param null|string $width
 	 * @param null|int $truncate
-	 * @return Column
+	 * @return Components\Column
 	 * @throws DuplicateColumnException
 	 * @return \Nifty\Grid\Column
 	 */
@@ -207,7 +229,7 @@ class Grid extends \Nette\Application\UI\Control
 		if(!empty($this['columns']->components[$name])){
 			throw new DuplicateColumnException("Column $name already exists.");
 		}
-		$column = new Column($this['columns'], $name);
+		$column = new Components\Column($this['columns'], $name);
 		$column->setName($name)
 			->setLabel($label)
 			->setWidth($width)
@@ -220,7 +242,7 @@ class Grid extends \Nette\Application\UI\Control
 	/**
 	 * @param string $name
 	 * @param null|string $label
-	 * @return Button
+	 * @return Components\Button
 	 * @throws DuplicateButtonException
 	 */
 	protected function addButton($name, $label = NULL)
@@ -228,7 +250,7 @@ class Grid extends \Nette\Application\UI\Control
 		if(!empty($this['buttons']->components[$name])){
 			throw new DuplicateButtonException("Button $name already exists.");
 		}
-		$button = new Button($this['buttons'], $name);
+		$button = new Components\Button($this['buttons'], $name);
 		if($name == self::ROW_FORM){
 			$self = $this;
 			$primaryKey = $this->primaryKey;
@@ -245,14 +267,14 @@ class Grid extends \Nette\Application\UI\Control
 	 * @param string $name
 	 * @param null|string $label
 	 * @throws DuplicateGlobalButtonException
-	 * @return GlobalButton
+	 * @return Components\GlobalButton
 	 */
 	public function addGlobalButton($name, $label = NULL)
 	{
 		if(!empty($this['globalButtons']->components[$name])){
 			throw new DuplicateGlobalButtonException("Global button $name already exists.");
 		}
-		$globalButton = new GlobalButton($this['globalButtons'], $name);
+		$globalButton = new Components\GlobalButton($this['globalButtons'], $name);
 		if($name == self::ADD_ROW){
 			$globalButton->setLink($this->link("addRow!"));
 		}
@@ -263,7 +285,7 @@ class Grid extends \Nette\Application\UI\Control
 	/**
 	 * @param string $name
 	 * @param null|string $label
-	 * @return Action
+	 * @return Components\Action
 	 * @throws DuplicateActionException
 	 */
 	public function addAction($name, $label = NULL)
@@ -271,7 +293,7 @@ class Grid extends \Nette\Application\UI\Control
 		if(!empty($this['actions']->components[$name])){
 			throw new DuplicateActionException("Action $name already exists.");
 		}
-		$action = new Action($this['actions'], $name);
+		$action = new Components\Action($this['actions'], $name);
 		$action->setName($name)
 			->setLabel($label);
 
@@ -281,7 +303,7 @@ class Grid extends \Nette\Application\UI\Control
 	/**
 	 * @param string $name
 	 * @param null|string $label
-	 * @return SubGrid
+	 * @return Components\SubGrid
 	 * @throws DuplicateSubGridException
 	 */
 	public function addSubGrid($name, $label = NULL)
@@ -291,13 +313,15 @@ class Grid extends \Nette\Application\UI\Control
 		}
 		$self = $this;
 		$primaryKey = $this->primaryKey;
-		$subGrid = new SubGrid($this['subGrids'], $name);
+		$subGrid = new Components\SubGrid($this['subGrids'], $name);
 		$subGrid->setName($name)
 			->setLabel($label);
 		if($this->activeSubGridName == $name){
-			$subGrid->setClass("grid-subgrid-close");
 			$subGrid->setClass(function($row) use ($self, $primaryKey){
-				return $row[$primaryKey] == $self->activeSubGridId ? "grid-subgrid-close" : "grid-subgrid-open";
+				return $row[$primaryKey] == $self->activeSubGridId ? "btn-warning" : "btn-success";
+			});
+			$subGrid->setIcon(function($row) use ($self, $primaryKey){
+				return $row[$primaryKey] == $self->activeSubGridId ? "icon-minus" : "icon-plus";
 			});
 			$subGrid->setLink(function($row) use ($self, $name, $primaryKey){
 				$link = $row[$primaryKey] == $self->activeSubGridId ? array("activeSubGridId" => NULL, "activeSubGridName" => NULL) : array("activeSubGridId" => $row[$primaryKey], "activeSubGridName" => $name);
@@ -305,10 +329,11 @@ class Grid extends \Nette\Application\UI\Control
 			});
 		}
 		else{
-			$subGrid->setClass("grid-subgrid-open")
-			->setLink(function($row) use ($self, $name, $primaryKey){
-				return $self->link("this", array("activeSubGridId" => $row[$primaryKey], "activeSubGridName" => $name));
-			});
+			$subGrid->setClass("btn-success")
+				->setIcon('icon-plus')
+				->setLink(function($row) use ($self, $name, $primaryKey){
+					return $self->link("this", array("activeSubGridId" => $row[$primaryKey], "activeSubGridName" => $name));
+				});
 		}
 		return $subGrid;
 	}
@@ -318,6 +343,7 @@ class Grid extends \Nette\Application\UI\Control
 	 */
 	public function getColumnNames()
 	{
+		$columns = array();
 		foreach($this['columns']->components as $column){
 			$columns[] = $column->name;
 		}
@@ -330,20 +356,28 @@ class Grid extends \Nette\Application\UI\Control
 	public function getColsCount()
 	{
 		$count = count($this['columns']->components);
-		$this->hasActionForm() ? $count++ : $count;
-		($this->hasButtons() || $this->hasFilterForm()) ? $count++ : $count;
+		if ($this->hasActionForm()) $count++;
+		if ($this->hasButtons() || $this->hasFilterForm()) $count++;
 		$count += count($this['subGrids']->components);
 
 		return $count;
 	}
 
 	/**
-	 * @param IDataSource $dataSource
+	 * @param DataSource\IDataSource $dataSource
 	 */
-	protected function setDataSource(IDataSource $dataSource)
+	protected function setDataSource(DataSource\IDataSource $dataSource)
 	{
 		$this->dataSource = $dataSource;
 		$this->primaryKey = $this->dataSource->getPrimaryKey();
+	}
+
+	/**
+	 * @param string $gridName
+	 */
+	public function setGridName($gridName)
+	{
+		$this->gridName = $gridName;
 	}
 
 	/**
@@ -354,7 +388,7 @@ class Grid extends \Nette\Application\UI\Control
 		$this->width = $width;
 	}
 
-        /**
+	/**
 	 * @param string $messageNoRecords
 	 */
 	public function setMessageNoRecords($messageNoRecords)
@@ -554,11 +588,11 @@ class Grid extends \Nette\Application\UI\Control
 			return $this->dataSource->filterData($filters);
 		}
 		catch(UnknownColumnException $e){
-			$this->flashMessage($e->getMessage(), "grid-error");
+			$this->flashMessage($e->getMessage(), "alert-error");
 			$this->redirect("this", array("filter" => NULL));
 		}
 		catch(UnknownFilterException $e){
-			$this->flashMessage($e->getMessage(), "grid-error");
+			$this->flashMessage($e->getMessage(), "alert-error");
 			$this->redirect("this", array("filter" => NULL));
 		}
 	}
@@ -571,14 +605,17 @@ class Grid extends \Nette\Application\UI\Control
 	{
 		try{
 			$order = explode(" ", $order);
-			if(in_array($order[0], $this->getColumnNames()) && in_array($order[1], array("ASC", "DESC")) && $this['columns']->components[$order[0]]->isSortable()){
+			if(in_array($order[0], $this->getColumnNames()) && in_array($order[1], array("ASC", "DESC")) && $this['columns-'.$order[0]]->isSortable()){
+				if(!empty($this['columns-'.$order[0]]->tableName)){
+					$order[0] = $this['columns-'.$order[0]]->tableName;
+				}
 				$this->dataSource->orderData($order[0], $order[1]);
 			}else{
 				throw new InvalidOrderException("Neplatné seřazení.");
 			}
 		}
 		catch(InvalidOrderException $e){
-			$this->flashMessage($e->getMessage(), "grid-error");
+			$this->flashMessage($e->getMessage(), "alert-error");
 			$this->redirect("this", array("order" => NULL));
 		}
 	}
@@ -588,6 +625,7 @@ class Grid extends \Nette\Application\UI\Control
 	 */
 	protected function getCount()
 	{
+		if(!$this->dataSource) throw new GridException("DataSource not yet set");
 		if($this->paginate){
 			$count = $this->dataSource->getCount();
 			$this->getPaginator()->itemCount = $count;
@@ -605,7 +643,7 @@ class Grid extends \Nette\Application\UI\Control
 	 */
 	protected function createComponentPaginator()
 	{
-		return  new GridPaginator;
+		return new GridPaginator;
 	}
 
 	/**
@@ -706,11 +744,14 @@ class Grid extends \Nette\Application\UI\Control
 		$form[$this->name]['rowForm']['send']->getControlPrototype()->addClass("grid-editable");
 
 		$form[$this->name]->addContainer("filter");
-		$form[$this->name]['filter']->addSubmit("send","Filtrovat");
+		$form[$this->name]['filter']->addSubmit("send","Filtrovat")
+			->setValidationScope(FALSE)
+			->getControlPrototype()->class('btn btn-primary');
 
 		$form[$this->name]->addContainer("action");
 		$form[$this->name]['action']->addSelect("action_name","Označené:");
 		$form[$this->name]['action']->addSubmit("send","Potvrdit")
+			->setValidationScope(FALSE)
 			->getControlPrototype()
 			->addData("select", $form[$this->name]["action"]["action_name"]->getControl()->name);
 
@@ -720,7 +761,12 @@ class Grid extends \Nette\Application\UI\Control
 			->addClass("grid-changeperpage")
 			->addData("gridname", $this->getGridPath())
 			->addData("link", $this->link("changePerPage!"));
-		$form[$this->name]['perPage']->addSubmit("send","Ok")->getControlPrototype()->addClass("grid-perpagesubmit");
+		$form[$this->name]['perPage']->addSubmit("send","Ok")
+			->setValidationScope(FALSE)
+			->getControlPrototype()
+			->addClass("grid-perpagesubmit");
+
+		$form->setTranslator($this->getTranslator());
 
 		$form->onSuccess[] = callback($this, "processGridForm");
 
@@ -818,9 +864,9 @@ class Grid extends \Nette\Application\UI\Control
 		}
 		catch(NoRowSelectedException $e){
 			if($subGrid){
-				$this[$gridName]->flashMessage("Nebyl vybrán žádný záznam.","grid-error");
+				$this[$gridName]->flashMessage("Nebyl vybrán žádný záznam.","alert-error");
 			}else{
-				$this->flashMessage("Nebyl vybrán žádný záznam.","grid-error");
+				$this->flashMessage("Nebyl vybrán žádný záznam.","alert-error");
 			}
 			$this->redirect("this");
 		}
@@ -869,8 +915,9 @@ class Grid extends \Nette\Application\UI\Control
 
 	public function render()
 	{
-		$this->getPaginator()->itemCount = $this->count;
-		$this->template->results = $this->count;
+		$count = $this->getCount();
+		$this->getPaginator()->itemCount = $count;
+		$this->template->results = $count;
 		$this->template->columns = $this['columns']->components;
 		$this->template->buttons = $this['buttons']->components;
 		$this->template->globalButtons = $this['globalButtons']->components;
@@ -903,8 +950,35 @@ class Grid extends \Nette\Application\UI\Control
 			$this->template->viewedFrom = ((($this->getPaginator()->getPage()-1)*$this->perPage)+1);
 			$this->template->viewedTo = ($this->getPaginator()->getLength()+(($this->getPaginator()->getPage()-1)*$this->perPage));
 		}
-		$templatePath = !empty($this->templatePath) ? $this->templatePath : __DIR__."/templates/grid.latte";
+		$templatePath = !empty($this->templatePath) ? $this->templatePath : __DIR__."/../../templates/grid.latte";
+
+		if ($this->getTranslator() instanceof \Nette\Localization\ITranslator) {
+			$this->template->setTranslator($this->getTranslator());
+		}
+
 		$this->template->setFile($templatePath);
 		$this->template->render();
+	}
+
+	/**
+	 * @param \Nette\Localization\ITranslator $translator
+	 * @return Grid
+	 */
+	public function setTranslator(\Nette\Localization\ITranslator $translator)
+	{
+		$this->translator = $translator;
+
+		return $this;
+	}
+
+	/**
+	 * @return \Nette\Localization\ITranslator|null
+	 */
+	public function getTranslator()
+	{
+		if($this->translator instanceof \Nette\Localization\ITranslator)
+			return $this->translator;
+
+		return null;
 	}
 }
